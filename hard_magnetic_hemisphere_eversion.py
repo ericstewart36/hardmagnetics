@@ -1,5 +1,5 @@
 """
-Code for hard-magnetic magneto-elasticity.
+Code for modeling hard-magnetic magneto-viscoelastic snap-through.
 
 - with the model comprising:
     > Large deformation compressible Neo-Hookean elasticity
@@ -7,10 +7,10 @@ Code for hard-magnetic magneto-elasticity.
       model with 3 branches, with evolution of internal variables in the
       style of Green and Tobolsky (1946) and Linder et al. (2011).
     > Inertial effects using the Newmark kinematic relations.
-    > Body couples due to magneto-quasistatic interactions between
-        - Permanently magnetized particles (b_rem) embedded in a mechanically soft matrix, and 
-        - an externally applied magnetic flux density (b_app).
-        
+    > Magnetic stresses due to magneto-quasistatic interactions between
+        - Permanently magnetized particles (m_rem = b_rem/mu0) embedded in a
+          mechanically soft matrix, and 
+        - an externally applied magnetic flux density (b_app).       
     
 - Under suitable assumptions described in the paper, magneto-quasistatics is 
   satisfied automatically and the only necessary numerical degree of freedom is 
@@ -81,7 +81,7 @@ mesh = Mesh()
 
 
 # Read the *.xdmf file data into mesh object
-with XDMFFile("hemisphere_9k.xdmf") as infile:
+with XDMFFile("meshes/hemisphere_9k.xdmf") as infile:
     infile.read(mesh)
 
 
@@ -133,10 +133,15 @@ rho = Constant(2.000e-6) # 1.75e3 kg/m^3 = 1.75e-6 kg/mm^3
 mu0 = Constant(1.256e-6*1e9) # mN / mA^2
 
 # Remanent magnetic flux density vector
-b_rem_mag = 100.0 # mT
-b_rem = Expression(("0", "pow(pow(x[0],2) + pow(x[2],2), 0.5) < scaleY+0.75 ? b_rem_mag: 0 ", "0"),\
-                       scaleY = scaleY, b_rem_mag = b_rem_mag, degree=0)
-    
+#b_rem_mag = 100.0 # mT
+b_rem_mag = 80.0*mu0/1e3 # 80 kA/m converted to mT
+b_rem   = Expression(("0", "( pow(pow(x[0],2) + pow(x[2],2), 0.5) < r+0.75 ) ? b : tol", "0"), \
+                     r=scaleY, b=float(b_rem_mag), tol=float(b_rem_mag)/200, degree=1)
+                        # Need some non-zero magnetization everywhere for convergence --
+                        # here the unmagnetized regions just have 1/200 of the strength 
+                        # of the magnetized regions.
+
+
 # Max applied magnetic flux density magnitude
 b_app_max = Constant(200) 
 angle_imperf = -1.0*np.pi/180 # imperfection in degrees, converted to radians
@@ -227,25 +232,76 @@ def F_calc(u):
     F = Id + grad(u) # 3D Deformation gradient
     return F # Full 3D F
 
+def safe_sqrt(x):
+    return sqrt(x + DOLFIN_EPS)
+
+def right_decomp(F):
+        
+    Id = Identity(3)
     
-def Piola(F,p, b_app, A1):
+    # Compute U and R using the methods of Hoger and Carlson (1984) 
+    
+    # invariants of C
+    C = F.T*F
+    #
+    I1C = tr(C)
+    I2C = (1/2)*(tr(C)**2 - tr(C*C))
+    I3C = det(C)
+
+    # intermediate quantity \lambda
+    #
+    # Have to ensure the argument to acos( ) is in [-1, 1]
+    arg = (2*(I1C**3) -9*I1C*I2C + 27*I3C)/( 2*safe_sqrt((I1C*I1C - 3*I2C)**(3)) ) 
+    arg2 = conditional(gt(arg, 1), 1, arg)
+    arg3 = conditional(lt(arg2, -1), -1, arg)
+    lambdaU = safe_sqrt(I1C + 2*safe_sqrt(I1C**2 - 3*I2C)*cos((1/3)*acos(arg3) ))/sqrt(3)
+    
+    # U invariants
+    I3U = safe_sqrt(I3C)
+    I2U = safe_sqrt(I3C)/lambdaU + safe_sqrt(I1C*(lambdaU**2) - lambdaU**4 + 2*safe_sqrt(I3C)*lambdaU)
+    I1U = lambdaU + safe_sqrt(I1C - lambdaU**2 + 2*safe_sqrt(I3C)/lambdaU )
+    
+    # intermediate quantity \Delta U
+    deltaU = I1U*I2U - I3U
+    
+    # final expression for U^{-1} tensor
+    Uinv = ((I3U*deltaU)**(-1))*( \
+                    + (I1U)*(C*C) \
+                    - ( I3U + I1U**3 - 2*I1U*I2U)*C \
+                    + (I1U*(I2U**2)  - I3U*(I1U**2) - I3U*I2U)*Id )
+        
+    R = F*Uinv
+    U = R.T*F
+
+    return R, U
+
+
+def Piola(F, R, U, p, b_app, A1):
     
     Id = Identity(3)
-    J = det(F)
     
+    J = det(F)
     C = F.T*F
     Cdis = J**(-2/3)*C
-    I1 = tr(Cdis)
+     
+    # Calculate the derivative dRdF after Chen and Wheeler (1992)
     #
-    T_mag = -outer(b_app, b_rem)/mu0
+    Y = tr(U)*Id - U # helper tensor Y 
     #
-    T_visc = J**(-2/3)*(Gneq_1*F*(A1 - (1/3)*inner(Cdis, A1)*inv(Cdis)))
+    Lmat = -outer(b_app, b_rem)/mu0 # dRdF will act on this tensor
+    #
+    T_mag = R*Y*(R.T*Lmat - Lmat.T*R)*Y/det(Y)
     
-    # Piola stress (Gent)
-    TR = J**(-2/3)*Gshear0*(F - 1/3*tr(C)*inv(F.T))\
+    # The viscous Piola stress
+    #
+    T_visc = J**(-2/3)*(Gneq_1*F*(A1 - (1/3)*inner(Cdis, A1)*inv(Cdis)) )
+    
+    # Piola stress
+    TR = J**(-2/3)*Gshear0*(F - 1/3*tr(C)*inv(F.T)) \
         + p*inv(F.T) + T_mag + T_visc
     
     return TR
+
     
 # Update formula for acceleration
 # a = 1/(2*beta)*((u - u0 - v0*dt)/(0.5*dt*dt) - (1-2*beta)*a0)
@@ -337,6 +393,10 @@ J = det(F)
 J_old = det(F_old)
 Cdis_3D = J**(-2/3)*C
 
+# Right polar decomposition.
+R_old, U_old = right_decomp(F_old)
+R, U = right_decomp(F)
+
 # Discretized evolution equations for updating A1
 A1 = (1/(1+dk/tau_1))*(A1_old + (dk/tau_1)*inv(Cdis_3D))
 
@@ -352,7 +412,7 @@ bcs_3  = DirichletBC(ME.sub(0).sub(2),0.0,facets,3) # right face z-fix
 bcs = [bcs_1, bcs_2, bcs_3]
 
 # Time-varying applied magnetic flux density (within whole domain, not a surface BC)
-step2_time   = 0.25     # Total application time
+step2_time   = 0.2    # Total application time
 #
 b_app_mag = Expression("magnitude*t",\
                    magnitude=b_app_max, t=0.0, degree=1)
@@ -370,15 +430,28 @@ b_app = as_vector([-x_mag*b_app_mag, -y_mag*b_app_mag, 0.0])
 '''''''''''''''''''''''
 
 # Equation of motion
-L0 = inner(Piola(F, p_avg, b_app, A1), grad(u_test))*dx + inner(rho*a_new, u_test)*dx 
+L0 = inner(Piola(F, R, U, p_avg, b_app, A1), grad(u_test))*dx + inner(rho*a_new, u_test)*dx 
    
 # Pressure penalty term
 L1 = inner(((J-1) - p_avg/Kbulk), p_test)*dx
+   
 # Total weak form
-L = (1/Gshear0)*L0 + L1 
+L = (1/Gshear0)*L0 + L1
 
-# Automatic differentiation tangent:
-a = derivative(L, w, dw)
+# Automatic differentiation tangent: 
+#
+#   For the tangent, we use the old values of R and U to avoid messy terms
+#   in the derivative of the U^{-1} calculation.
+#
+#   Importantly, the residuals are still enforced with the current R and U,
+#   so the Newton-Raphson solver is still fully implicit.
+#
+L0_prime = inner(Piola(F, R_old, U_old, p_avg, b_app, A1), grad(u_test))*dx + inner(rho*a_new, u_test)*dx 
+#
+L_prime  = (1/Gshear0)*L0_prime + L1
+#
+a = derivative(L_prime, w, dw)
+
 
 '''''''''''''''''''''
     RUN ANALYSIS
@@ -395,6 +468,10 @@ u_v.rename("displacement","")
 
 p_v = w_old.sub(1)
 p_v.rename("p", "")
+
+b_out       = np.zeros(100000)
+disp_out    = np.zeros(100000)
+time_out    = np.zeros(100000)
 
 ii=0
 
@@ -413,16 +490,36 @@ prm['newton_solver']['maximum_iterations'] = 30
 
 # function to write results to XDMF at time t
 def writeResults(t):
+
     # Displacement, pressure penalty term
     file_results.write(u_v,t)
     file_results.write(p_v,t)
     
-    # Write the spatial b_rem
-    b_Vis  = F*b_rem
-    b_v = local_project(b_Vis, VectorFunctionSpace(mesh, "Lagrange", 1))
-    b_v.rename("b_rem","")
+    # Write the effective stretch
+    lambda_eff = safe_sqrt(tr(Cdis_3D)/3)
+    lambda_eff_v = project(lambda_eff, FunctionSpace(mesh, "CG", 1))
+    lambda_eff_v.rename("lambda_eff","")
+    file_results.write(lambda_eff_v,t)
+    
+    # Write J
+    J_v = project(J, FunctionSpace(mesh, "CG", 1))
+    J_v.rename("J","")
+    file_results.write(J_v,t)
+    
+    # Write the spatial m_rem
+    m_Vis  = R*b_rem/det(F)/mu0*1000 # units of kA/m
+    m_v = local_project(m_Vis, VectorFunctionSpace(mesh, "CG", 1))
+    m_v.rename("m_rem","")
     #
-    file_results.write(b_v,t)
+    file_results.write(m_v,t)
+    
+    # Write the magnitude of R*m^rem_mat
+    Rm_rem  = R*b_rem/mu0*1000 # units of kA/m
+    m_mag  = safe_sqrt(dot(Rm_rem, Rm_rem))
+    m_mag_v = project(m_mag, FunctionSpace(mesh, "CG", 1))
+    m_mag_v.rename("m_mag","")
+    #
+    file_results.write(m_mag_v,t)
 
 # Write initial state at t=0
 writeResults(t=0.0)
@@ -430,20 +527,35 @@ writeResults(t=0.0)
 # Give the step a descriptive name
 step = "Eversion"
 
-while (round(t,4) <= round(2*step2_time,4)):
+while (round(t,4) <= round(2*step2_time + 0.1,4)):
     
     # update the time and time-dependent BCs
     t += step2_dt
     b_app_mag.t = 1.0 # constant b-field 
     
-    if t>0.25:
-        b_app_mag.t = -0.5 # reverse b-field after 0.25 s
+    if t>0.1:
+        b_app_mag.t = 0.0 # turn off b-field from 0.1 s to 0.2 s
+        if t>0.2:
+            b_app_mag.t = -0.4 # reverse b-field after 0.2 s
+            if t>0.3:
+                b_app_mag.t = 0.0 # turn off b-field again after 0.3 s
 
     # Solve the problem
     (iter, converged) = solver.solve()
      
     # increment counter
     ii = ii + 1
+    
+    # Output time histories
+    b_out[ii] = float(b_app_max)
+    if t>0.1:
+        b_out[ii] = 0.0 # turn off b-field from 0.1 s to 0.2 s
+        if t>0.2:
+            b_out[ii] =  -0.4*float(b_app_max) # reverse b-field after 0.2 s
+            if t>0.3:
+                b_out[ii] = 0.0 # turn off b-field again after 0.3 s
+    disp_out[ii] = w(0, scaleY, 0)[1]
+    time_out[ii] = t
     
     # Update fields for next step
     u_proj = project(u, W2)
@@ -466,3 +578,37 @@ while (round(t,4) <= round(2*step2_time,4)):
     if ii%50==0:
         # Write results to *.xdmf at current time
         writeResults(t)
+
+'''''''''''''''''''''
+    VISUALIZATION
+'''''''''''''''''''''
+        
+# Set up font size, initialize colors array
+font = {'size'   : 16}
+plt.rc('font', **font)
+#
+prop_cycle = plt.rcParams['axes.prop_cycle']
+colors = prop_cycle.by_key()['color']
+
+# only plot as far as time_out has time history for.
+ind  = np.argmax(time_out)
+
+plt.figure()
+plt.axvline(0, c='k', linewidth=1.)
+plt.axhline(0, c='k', linewidth=1.)
+plt.plot(time_out[0:ind], disp_out[0:ind], linewidth=2.5, \
+         color=colors[3])
+plt.axis('tight')
+plt.xlabel(r"Time (s)")
+plt.ylabel(r"$u_2$ at point A (mm)")
+plt.grid(linestyle="--", linewidth=0.5, color='b')
+#plt.ylim(-4, 12)
+#plt.ylim(5,10)
+plt.xlim(0.0,2*step2_time + 0.1)
+#plt.xlim(0.9,1.4)
+
+# save figure to file
+fig = plt.gcf()
+fig.set_size_inches(6, 4)
+plt.tight_layout()
+plt.savefig("plots/hard_magnetic_eversion.png", dpi=600)
