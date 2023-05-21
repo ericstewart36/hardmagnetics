@@ -7,10 +7,10 @@ Code for modeling hard-magnetic magneto-viscoelastic snap-through.
       model with 3 branches, with evolution of internal variables in the
       style of Green and Tobolsky (1946) and Linder et al. (2011).
     > Inertial effects using the Newmark kinematic relations.
-    > Body couples due to magneto-quasistatic interactions between
-        - Permanently magnetized particles (b_rem) embedded in a mechanically soft matrix, and 
-        - an externally applied magnetic flux density (b_app).
-        
+    > Magnetic stresses due to magneto-quasistatic interactions between
+        - Permanently magnetized particles (m_rem = b_rem/mu0) embedded in a
+          mechanically soft matrix, and 
+        - an externally applied magnetic flux density (b_app).       
     
 - Under suitable assumptions described in the paper, magneto-quasistatics is 
   satisfied automatically and the only necessary numerical degree of freedom is 
@@ -41,6 +41,7 @@ Code for modeling hard-magnetic magneto-viscoelastic snap-through.
 
 # FEniCS package
 from dolfin import *
+from ufl import eq
 # NumPy for arrays and array operations
 import numpy as np
 # MatPlotLib for plotting
@@ -67,7 +68,7 @@ set_log_level(30)
 parameters["form_compiler"]["cpp_optimize"] = True
 parameters["form_compiler"]["representation"] = "uflacs"
 parameters["form_compiler"]["cpp_optimize_flags"] = "-O3 -ffast-math -march=native"
-parameters["form_compiler"]["quadrature_degree"] = 2
+parameters["form_compiler"]["quadrature_degree"] = 4
 
 '''''''''''''''''''''
 DEFINE GEOMETRY
@@ -229,6 +230,7 @@ ME = FunctionSpace(mesh, TH) # Total space for all DOFs
 W = FunctionSpace(mesh,P1)   # Scalar space for visualization later
 W2 = FunctionSpace(mesh,U2)   # Vector space for visualization later
 W3 = FunctionSpace(mesh,T1)   # Tensor space for visualization later
+V  = TensorFunctionSpace(mesh, 'CG',1)
 
 # Define test functions in weak form
 dw = TrialFunction(ME)                                   
@@ -270,25 +272,76 @@ def F_calc(u):
     F = Id + grad(u) # 3D Deformation gradient
     return F # Full 3D F
 
+def safe_sqrt(x):
+    return sqrt(x + DOLFIN_EPS)
+
+def right_decomp(F):
+        
+    Id = Identity(3)
     
-def Piola(F,p, b_app, A1):
+    # Compute U and R using the methods of Hoger and Carlson (1984) 
+    
+    # invariants of C
+    C = F.T*F
+    #
+    I1C = tr(C)
+    I2C = (1/2)*(tr(C)**2 - tr(C*C))
+    I3C = det(C)
+
+    # intermediate quantity \lambda
+    #
+    # Have to ensure the argument to acos( ) is in [-1, 1]
+    arg = (2*(I1C**3) -9*I1C*I2C + 27*I3C)/( 2*safe_sqrt((I1C*I1C - 3*I2C)**(3)) ) 
+    arg2 = conditional(gt(arg, 1), 1, arg)
+    arg3 = conditional(lt(arg2, -1), -1, arg)
+    lambdaU = safe_sqrt(I1C + 2*safe_sqrt(I1C**2 - 3*I2C)*cos((1/3)*acos(arg3) ))/sqrt(3)
+    
+    # U invariants
+    I3U = safe_sqrt(I3C)
+    I2U = safe_sqrt(I3C)/lambdaU + safe_sqrt(I1C*(lambdaU**2) - lambdaU**4 + 2*safe_sqrt(I3C)*lambdaU)
+    I1U = lambdaU + safe_sqrt(I1C - lambdaU**2 + 2*safe_sqrt(I3C)/lambdaU )
+    
+    # intermediate quantity \Delta U
+    deltaU = I1U*I2U - I3U
+    
+    # final expression for U^{-1} tensor
+    Uinv = ((I3U*deltaU)**(-1))*( \
+                    + (I1U)*(C*C) \
+                    - ( I3U + I1U**3 - 2*I1U*I2U)*C \
+                    + (I1U*(I2U**2)  - I3U*(I1U**2) - I3U*I2U)*Id )
+        
+    R = F*Uinv
+    U = R.T*F
+
+    return R, U
+
+
+def Piola(F, R, U, p, b_app, A1):
     
     Id = Identity(3)
-    J = det(F)
     
+    J = det(F)
     C = F.T*F
     Cdis = J**(-2/3)*C
-    I1 = tr(Cdis)
+     
+    # Calculate the derivative dRdF after Chen and Wheeler (1992)
     #
-    T_mag = -outer(b_app, b_rem)/mu0
+    Y = tr(U)*Id - U # helper tensor Y 
     #
-    T_visc = J**(-2/3)*(Gneq_1*F*(A1 - (1/3)*inner(Cdis, A1)*inv(Cdis)))
+    Lmat = -outer(b_app, b_rem)/mu0 # dRdF will act on this tensor
+    #
+    T_mag = R*Y*(R.T*Lmat - Lmat.T*R)*Y/det(Y)
     
-    # Piola stress 
-    TR = J**(-2/3)*Gshear0*(F - 1/3*tr(C)*inv(F.T))\
+    # The viscous Piola stress
+    #
+    T_visc = J**(-2/3)*(Gneq_1*F*(A1 - (1/3)*inner(Cdis, A1)*inv(Cdis)) )
+    
+    # Piola stress
+    TR = J**(-2/3)*Gshear0*(F - 1/3*tr(C)*inv(F.T)) \
         + p*inv(F.T) + T_mag + T_visc
     
     return TR
+
     
 # Update formula for acceleration
 # a = 1/(2*beta)*((u - u0 - v0*dt)/(0.5*dt*dt) - (1-2*beta)*a0)
@@ -376,6 +429,10 @@ J = det(F)
 J_old = det(F_old)
 Cdis_3D = J**(-2/3)*C
 
+# Right polar decomposition
+R, U = right_decomp(F)
+R_old, U_old = right_decomp(F_old)
+
 # Discretized evolution equations for updating A1.
 A1 = (1/(1+dk/tau_1))*(A1_old + (dk/tau_1)*inv(Cdis_3D))
 
@@ -418,7 +475,7 @@ b_app = as_vector([0.0, b_app_mag, 0.0])
 '''''''''''''''''''''''
 
 # Equation of motion
-L0 = inner(Piola(F, p_avg, b_app, A1), grad(u_test))*dx + inner(rho*a_new, u_test)*dx 
+L0 = inner(Piola(F, R, U, p_avg, b_app, A1), grad(u_test))*dx + inner(rho*a_new, u_test)*dx 
    
 # Pressure penalty term
 L1 = inner(((J-1) - p_avg/Kbulk), p_test)*dx
@@ -426,15 +483,26 @@ L1 = inner(((J-1) - p_avg/Kbulk), p_test)*dx
 # Total weak form
 L = (1/Gshear0)*L0 + L1
 
-# Automatic differentiation tangent:
-a = derivative(L, w, dw)
+# Automatic differentiation tangent: 
+#
+#   For the tangent, we use the old values of R and U to avoid messy terms
+#   in the derivative of the U^{-1} calculation.
+#
+#   Importantly, the residuals are still enforced with the current R and U,
+#   so the Newton-Raphson solver is still fully implicit.
+#
+L0_prime = inner(Piola(F, R_old, U_old, p_avg, b_app, A1), grad(u_test))*dx + inner(rho*a_new, u_test)*dx 
+#
+L_prime  = (1/Gshear0)*L0_prime + L1
+#
+a = derivative(L_prime, w, dw)
 
 '''''''''''''''''''''
     RUN ANALYSIS
 '''''''''''''''''''''
 
 # Output file setup
-file_results = XDMFFile("hard_magnetic_triangle_bfield.xdmf")
+file_results = XDMFFile("results/hard_magnetic_triangle_bfield.xdmf")
 file_results.parameters["flush_output"] = True
 file_results.parameters["functions_share_mesh"] = True
 
@@ -466,16 +534,36 @@ prm['newton_solver']['maximum_iterations'] = 30
 
 # function to write results to XDMF at time t
 def writeResults(t):
+
     # Displacement, pressure penalty term
     file_results.write(u_v,t)
     file_results.write(p_v,t)
     
-    # Write the spatial b_rem
-    b_Vis  = F*b_rem
-    b_v = local_project(b_Vis, VectorFunctionSpace(mesh, "Lagrange", 1))
-    b_v.rename("b_rem","")
+    # Write the effective stretch
+    lambda_eff = safe_sqrt(tr(Cdis_3D)/3)
+    lambda_eff_v = project(lambda_eff, FunctionSpace(mesh, "CG", 1))
+    lambda_eff_v.rename("lambda_eff","")
+    file_results.write(lambda_eff_v,t)
+    
+    # Write J
+    J_v = project(J, FunctionSpace(mesh, "CG", 1))
+    J_v.rename("J","")
+    file_results.write(J_v,t)
+    
+    # Write the spatial m_rem
+    m_Vis  = R*b_rem/det(F)/mu0*1000 # units of kA/m
+    m_v = local_project(m_Vis, VectorFunctionSpace(mesh, "CG", 1))
+    m_v.rename("m_rem","")
     #
-    file_results.write(b_v,t)
+    file_results.write(m_v,t)
+    
+    # Write the magnitude of R*m^rem_mat
+    Rm_rem  = R*b_rem/mu0*1000 # units of kA/m
+    m_mag  = safe_sqrt(dot(Rm_rem, Rm_rem))
+    m_mag_v = project(m_mag, FunctionSpace(mesh, "CG", 1))
+    m_mag_v.rename("m_mag","")
+    #
+    file_results.write(m_mag_v,t)
 
 # Write initial state at t=0
 writeResults(t=0.0)
@@ -530,20 +618,6 @@ while (round(t,4) <= round(T_tot + step2_time,4)):
         current_time = now.strftime("%H:%M:%S")
         print("Step: {}   |   Simulation Time: {} s  |     Iterations: {}".format(step, t, iter))
         print()
-        
-
-# Final step paraview output
-file_results.write(u_v,t)
-file_results.write(p_v, t)
-
-# output final time histories
-if t+dt>T_tot:
-    b_out[ii] = b_app_max*(1.0 - 2*2*np.abs( (t-0.25*step2_time)/(step2_time) \
-                            - np.floor((t-0.25*step2_time)/(step2_time) + 0.5) ) )
-else:
-    b_out[ii] = 0.0
-disp_out[ii] = w(scaleX/2, scaleY/2, scaleZ/2)[1]
-time_out[ii] = t
 
 '''''''''''''''''''''
     VISUALIZATION
@@ -560,7 +634,7 @@ colors = prop_cycle.by_key()['color']
 ind  = np.argmax(time_out)
 ind2 = np.where(time_out==T_tot)[0][0]
 
-expData = np.genfromtxt('Tan_triangle_data.csv', delimiter=',')
+expData = np.genfromtxt('exp_data/Tan_triangle_data.csv', delimiter=',')
 
 plt.figure()
 plt.scatter(expData[:,0] - expData[0,0], expData[:,1], s=25,
@@ -585,4 +659,4 @@ plt.legend()
 fig = plt.gcf()
 fig.set_size_inches(6, 4)
 plt.tight_layout()
-plt.savefig("hard_magnetic_triangle_bfield.png", dpi=600)
+plt.savefig("plots/hard_magnetic_triangle_bfield.png", dpi=600)
