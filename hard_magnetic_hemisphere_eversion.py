@@ -135,11 +135,12 @@ mu0 = Constant(1.256e-6*1e9) # mN / mA^2
 # Remanent magnetic flux density vector
 #b_rem_mag = 100.0 # mT
 b_rem_mag = 80.0*mu0/1e3 # 80 kA/m converted to mT
-b_rem   = Expression(("0", "( pow(pow(x[0],2) + pow(x[2],2), 0.5) < r+0.75 ) ? b : tol", "0"), \
-                     r=scaleY, b=float(b_rem_mag), tol=float(b_rem_mag)/200, degree=1)
-                        # Need some non-zero magnetization everywhere for convergence --
-                        # here the unmagnetized regions just have 1/200 of the strength 
-                        # of the magnetized regions.
+b_rem   = Expression(("0", "( pow(pow(x[0],2) + pow(x[2],2), 0.5) < r+0.75 ) ? b : ( (t<0.00020)? tol : 0.0) ", "0"), \
+                     r=scaleY, b=float(b_rem_mag), t=0.0, tol=float(b_rem_mag)/200, degree=1)
+                        # I found that we need some non-zero magnetization everywhere 
+                        # for initial convergence. Here, the unmagnetized regions 
+                        # have 1/200 of the strength of the magnetized regions for 0.2 ms,
+                        # then 0 magnetization for all times after.
 
 
 # Max applied magnetic flux density magnitude
