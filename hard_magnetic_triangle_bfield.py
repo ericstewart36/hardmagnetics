@@ -338,7 +338,7 @@ def Piola(F, R, U, p, b_app, A1):
     
     # Piola stress
     TR = J**(-2/3)*Gshear0*(F - 1/3*tr(C)*inv(F.T)) \
-        + p*inv(F.T) + T_mag + T_visc
+        + J*p*inv(F.T) + T_mag + T_visc
     
     return TR
 
@@ -634,7 +634,7 @@ colors = prop_cycle.by_key()['color']
 ind  = np.argmax(time_out)
 ind2 = np.where(time_out==T_tot)[0][0]
 
-expData = np.genfromtxt('exp_data/Tan_triangle_data.csv', delimiter=',')
+expData = np.genfromtxt('Tan_triangle_data.csv', delimiter=',')
 
 plt.figure()
 plt.scatter(expData[:,0] - expData[0,0], expData[:,1], s=25,
@@ -659,4 +659,4 @@ plt.legend()
 fig = plt.gcf()
 fig.set_size_inches(6, 4)
 plt.tight_layout()
-plt.savefig("plots/hard_magnetic_triangle_bfield.png", dpi=600)
+plt.savefig("hard_magnetic_triangle_bfield.png", dpi=600)
