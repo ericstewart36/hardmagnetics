@@ -299,7 +299,7 @@ def Piola(F, R, U, p, b_app, A1):
     
     # Piola stress
     TR = J**(-2/3)*Gshear0*(F - 1/3*tr(C)*inv(F.T)) \
-        + p*inv(F.T) + T_mag + T_visc
+        + J*p*inv(F.T) + T_mag + T_visc
     
     return TR
 
@@ -612,4 +612,4 @@ plt.xlim(0.0,2*step2_time + 0.1)
 fig = plt.gcf()
 fig.set_size_inches(6, 4)
 plt.tight_layout()
-plt.savefig("plots/hard_magnetic_eversion.png", dpi=600)
+plt.savefig("hard_magnetic_eversion.png", dpi=600)
