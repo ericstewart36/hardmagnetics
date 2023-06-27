@@ -346,7 +346,7 @@ def Piola(F, R, U, p, b_app, A1):
     
     # Piola stress
     TR = J**(-2/3)*Gshear0*(F - 1/3*tr(C)*inv(F.T)) \
-        + p*inv(F.T) + T_mag + T_visc
+        + J*p*inv(F.T) + T_mag + T_visc
     
     return TR
 
@@ -773,10 +773,10 @@ plt.xlim(scaleX, 120)
 fig = plt.gcf()
 fig.set_size_inches(6, 4)
 plt.tight_layout()
-plt.savefig("plots/magnetoelastic_buckle_assemble.png", dpi=600)
+plt.savefig("magnetoelastic_buckle_assemble.png", dpi=600)
 '''
 
-expData = np.genfromtxt('exp_data/Tan_buckle_impulse_data.csv', delimiter=',')
+expData = np.genfromtxt('Tan_buckle_impulse_data.csv', delimiter=',')
 
 
 plt.figure()
@@ -804,4 +804,4 @@ ax.yaxis.set_minor_locator(MultipleLocator(0.05))
 fig = plt.gcf()
 fig.set_size_inches(8, 3)
 plt.tight_layout()
-plt.savefig("plots/hard_magnetic_mechanical_impulse.png", dpi=600)
+plt.savefig("hard_magnetic_mechanical_impulse.png", dpi=600)
