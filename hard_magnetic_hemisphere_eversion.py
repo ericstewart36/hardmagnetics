@@ -81,7 +81,7 @@ mesh = Mesh()
 
 
 # Read the *.xdmf file data into mesh object
-with XDMFFile("meshes/hemisphere_9k.xdmf") as infile:
+with XDMFFile("hemisphere_9k.xdmf") as infile:
     infile.read(mesh)
 
 
