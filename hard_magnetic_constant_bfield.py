@@ -41,8 +41,6 @@ Code for modeling hard-magnetic magneto-viscoelastic snap-through.
 
 # FEniCS package
 from dolfin import *
-from ufl import eq
-import ufl
 # NumPy for arrays and array operations
 import numpy as np
 # MatPlotLib for plotting
