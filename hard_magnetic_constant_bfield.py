@@ -482,13 +482,14 @@ L = (1/Gshear0)*L0 + L1
 
 # Automatic differentiation tangent: 
 #
-#   For the tangent, we use the old values of R and U to avoid messy terms
-#   in the derivative of the U^{-1} calculation.
+#   When computing the Piola stress for the tangent, we approximate R and U as
+#   F and Identity(3) respectively, in order to avoid messy terms in the 
+#   derivative of the U^{-1} calculation which cause numerical convergence issues.
 #
 #   Importantly, the residuals are still enforced with the current R and U,
-#   so the Newton-Raphson solver is still fully implicit.
+#   so the Newton-Raphson solver is still fully implicit and correct.
 #
-L0_prime = inner(Piola(F, R_old, U_old, p_avg, b_app, A1), grad(u_test))*dx + inner(rho*a_new, u_test)*dx 
+L0_prime = inner(Piola(F, F, Identity(3), p_avg, b_app, A1), grad(u_test))*dx + inner(rho*a_new, u_test)*dx 
 #
 L_prime  = (1/Gshear0)*L0_prime + L1
 #
