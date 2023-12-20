@@ -483,8 +483,9 @@ L = (1/Gshear0)*L0 + L1
 #   F and Identity(3) respectively, in order to avoid messy terms in the 
 #   derivative of the U^{-1} calculation which cause numerical convergence issues.
 #
-#   Importantly, the residuals are still enforced with the current R and U,
-#   so the Newton-Raphson solver is still fully implicit and correct.
+#   Importantly, the residuals are still enforced with the current R and U.
+#   Changing the Jacobian in this manner only changes the rate of convergence 
+#   of the Newton-Raphson solver, and not the ultimate result.
 #
 L0_prime = inner(Piola(F, F, Identity(3), p_avg, b_app, A1), grad(u_test))*dx + inner(rho*a_new, u_test)*dx 
 #
